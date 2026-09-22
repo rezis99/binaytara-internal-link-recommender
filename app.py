@@ -60,11 +60,50 @@ def render(res, key_prefix: str = ""):
     c[3].metric("Links to receive", len(res["receive"]))
     c[4].metric("Existing body links", len(a["existing_links"]))
 
+    # Diagnostic funnel: shows exactly where candidates were dropped.
+    # This exists because a zero-suggestion result used to be unexplainable.
+    f = res.get("funnel") or {}
+    if f:
+        zero = len(res["give"]) == 0 and len(res["receive"]) == 0
+        with st.expander("Why these results? (pipeline diagnostics)", expanded=zero):
+            d1, d2 = st.columns(2)
+            with d1:
+                st.markdown("**Links to Give**")
+                st.text(
+                    f"Candidates pre-filtered : {f.get('give_prefiltered', 0)}\n"
+                    f"Passed Gemini relevance : {f.get('give_gemini_approved', 0)}\n"
+                    f"Dropped, no usable anchor: {f.get('give_no_anchor', 0)}\n"
+                    f"Dropped, duplicate anchor: {f.get('give_dup_anchor', 0)}\n"
+                    f"Dropped, SOP rules       : {f.get('give_rule_drops', 0)}\n"
+                    f"Before per-paragraph caps: {f.get('give_before_caps', 0)}\n"
+                    f"FINAL                    : {f.get('give_final', 0)}"
+                )
+            with d2:
+                st.markdown("**Links to Receive**")
+                st.text(
+                    f"Candidates pre-filtered : {f.get('recv_prefiltered', 0)}\n"
+                    f"Passed Gemini relevance : {f.get('recv_gemini_approved', 0)}\n"
+                    f"FINAL                    : {f.get('recv_final', 0)}"
+                )
+            if f.get("give_prefiltered", 0) == 0:
+                st.warning(
+                    "Zero candidates pre-filtered. The page database may be missing "
+                    "body_texts.json, or this article's disease terms match no other page.")
+            elif f.get("give_gemini_approved", 0) == 0:
+                st.warning(
+                    "Gemini rejected every candidate. Check the API key and quota at "
+                    "https://aistudio.google.com")
+            elif f.get("give_final", 0) == 0 and f.get("give_no_anchor", 0) > 0:
+                st.warning(
+                    "Candidates passed relevance but no usable anchor was found in the "
+                    "article text. Gemini sentence rewriting may be failing validation.")
+
     t1, t2, t3 = st.tabs([
         f"Links to Give ({len(res['give'])})",
         f"Links to Receive ({len(res['receive'])})",
         f"Existing links ({len(a['existing_links'])})",
     ])
+
     with t1:
         st.caption("Where in this article to place links out. Anchors are selected "
                    "from destination page H1/title. First paragraph, Key Takeaways, "
