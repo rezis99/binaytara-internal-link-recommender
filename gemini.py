@@ -207,3 +207,57 @@ def judge_receive_candidates(article: dict, candidates: list[dict]) -> list[dict
         cand["gemini_reason"] = j["reason"]
 
     return candidates
+
+
+def rewrite_sentence(sentence: str, anchor: str, target_title: str,
+                     target_url: str) -> str | None:
+    """Ask Gemini to rewrite a sentence to naturally include an anchor phrase.
+
+    This is called ONLY when the anchor doesn't appear verbatim in the sentence
+    (the 'Needs insertion' case). Code handles exact matches; Gemini handles
+    creative rewriting.
+
+    Returns the rewritten sentence with [anchor](url) in place, or None if
+    the rewrite fails validation.
+    """
+    key = _get_api_key()
+    if not key:
+        return None
+
+    prompt = f"""Rewrite this sentence to naturally include the phrase "{anchor}" so it can be hyperlinked. Rules:
+1. The phrase "{anchor}" must appear EXACTLY as written (same words, same spelling)
+2. Wrap it as a markdown link: [{anchor}]({target_url})
+3. Keep the original meaning. Do not add medical claims, statistics, or facts.
+4. Change as few words as possible. The rewrite should feel like a minor edit, not a new sentence.
+5. Return ONLY the rewritten sentence. No explanation, no quotes around it.
+
+The link points to a page titled: {target_title}
+
+Original sentence: {sentence}
+
+Rewritten sentence:"""
+
+    response = _call_gemini(prompt)
+    if not response:
+        return None
+
+    rewrite = response.strip().strip('"').strip("'")
+
+    # Validate
+    import re
+    anchor_pattern = r"\b" + re.escape(anchor) + r"\b"
+    if not re.search(anchor_pattern, rewrite, re.I):
+        return None
+    if f"]({target_url})" not in rewrite:
+        return None
+    # Length check
+    orig_words = len(sentence.split())
+    new_words = len(rewrite.split())
+    if orig_words > 0 and (new_words < orig_words * 0.6 or new_words > orig_words * 1.8):
+        return None
+    # No meta-commentary
+    for bad in ["here is", "note:", "rewritten:", "i've"]:
+        if bad in rewrite.lower():
+            return None
+
+    return rewrite
