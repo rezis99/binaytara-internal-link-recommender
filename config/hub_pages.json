@@ -1,0 +1,145 @@
+{
+  "description": "Planned /cancer-types/ hub pages. When a hub page goes live, set its 'live' field to true and fill in the 'url' field. The tool will then prefer the hub page as the link target for that cancer type.",
+  "cancer_types": {
+    "colorectal cancer": {
+      "url": "/cancer-types/colorectal-cancer",
+      "phase": "Proof of Concept",
+      "live": false
+    },
+    "breast cancer": {
+      "url": "/cancer-types/breast-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "skin cancer": {
+      "url": "/cancer-types/skin-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "prostate cancer": {
+      "url": "/cancer-types/prostate-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "lung cancer": {
+      "url": "/cancer-types/lung-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "pancreatic cancer": {
+      "url": "/cancer-types/pancreatic-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "ovarian cancer": {
+      "url": "/cancer-types/ovarian-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "bladder cancer": {
+      "url": "/cancer-types/bladder-cancer",
+      "phase": "Phase 1",
+      "live": false
+    },
+    "stomach cancer": {
+      "url": "/cancer-types/stomach-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "cervical cancer": {
+      "url": "/cancer-types/cervical-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "thyroid cancer": {
+      "url": "/cancer-types/thyroid-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "oral cancer": {
+      "url": "/cancer-types/oral-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "throat cancer": {
+      "url": "/cancer-types/throat-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "testicular cancer": {
+      "url": "/cancer-types/testicular-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "liver cancer": {
+      "url": "/cancer-types/liver-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "uterine cancer": {
+      "url": "/cancer-types/uterine-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "melanoma": {
+      "url": "/cancer-types/melanoma",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "blood cancer": {
+      "url": "/cancer-types/blood-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "bone cancer": {
+      "url": "/cancer-types/bone-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "esophageal cancer": {
+      "url": "/cancer-types/esophageal-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "brain cancer": {
+      "url": "/cancer-types/brain-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "kidney cancer": {
+      "url": "/cancer-types/kidney-cancer",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "lymphoma": {
+      "url": "/cancer-types/lymphoma",
+      "phase": "Phase 2",
+      "live": false
+    },
+    "multiple myeloma": {
+      "url": "/cancer-types/multiple-myeloma",
+      "phase": "Phase 3",
+      "live": false
+    },
+    "sarcoma": {
+      "url": "/cancer-types/sarcoma",
+      "phase": "Phase 3",
+      "live": false
+    },
+    "leukemia": {
+      "url": "/cancer-types/leukemia",
+      "phase": "Phase 3",
+      "live": false
+    },
+    "glioblastoma": {
+      "url": "/cancer-types/glioblastoma",
+      "phase": "Phase 3",
+      "live": false
+    },
+    "mesothelioma": {
+      "url": "/cancer-types/mesothelioma",
+      "phase": "Phase 3",
+      "live": false
+    }
+  }
+}
