@@ -1,15 +1,14 @@
-"""Gemini API client for page relevance judgment (v6).
+"""Gemini API client (v6).
 
-Gemini's ONE job: answer 'Is this candidate page relevant to this article?
-YES or NO.' Everything else (anchor selection, sentence finding, formatting)
-is handled by code.
+Three prompt types, each doing ONE job:
+  1. Give judgment: Is this page a good link target for this article? YES/NO
+  2. Receive judgment: Should this page link TO this article? YES/NO
+  3. Sentence rewrite: Modify one sentence to include an anchor phrase naturally
 
-Uses Gemini 1.5 Flash for the highest free-tier limits (1,500 RPD, 15 RPM).
-Falls back gracefully when no API key is configured or rate limits are hit.
+Uses Gemini 1.5 Flash (1,500 RPD free, 15 RPM).
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -40,76 +39,113 @@ def is_available() -> tuple[bool, str]:
 
 
 def _build_give_prompt(article: dict, candidates: list[dict]) -> str:
-    """Build the Give-side relevance judgment prompt."""
     h1 = article.get("h1") or article.get("title_clean") or ""
-    diseases = ", ".join(article.get("_diseases", [])) or "unknown"
-    existing = ", ".join(article.get("body_internal_links", [])[:10])
+    diseases = ", ".join(article.get("_diseases", [])) or "not identified"
+    existing = ", ".join(
+        u.replace("https://binaytara.org", "")
+        for u in (article.get("body_internal_links") or [])[:10]
+    ) or "none"
 
     cand_lines = []
     for i, c in enumerate(candidates, 1):
-        line = (f"{i}. {c['url']} | H1: {c.get('h1') or c.get('title_clean') or ''} "
-                f"| Section: {c.get('section', '')} "
-                f"| Desc: {(c.get('meta_description') or '')[:100]}")
-        cand_lines.append(line)
+        h = c.get("h1") or c.get("title_clean") or ""
+        s = c.get("section", "")
+        cand_lines.append(f"{i}. [{s}] {h}")
 
-    return f"""You are reviewing internal link candidates for a cancer education website (binaytara.org).
+    return f"""TASK: Decide which candidate pages are good internal link targets for this article.
 
-ARTICLE: {h1}
-URL: {article.get('url', '')}
-DISEASES DISCUSSED: {diseases}
-ALREADY LINKS TO: {existing}
+CONTEXT:
+Site: binaytara.org (cancer education nonprofit)
+Article: "{h1}"
+Diseases this article covers: {diseases}
+Pages already linked from this article: {existing}
 
-ANSWER YES or NO for each candidate page below. Use these rules:
+DECISION RULES (apply strictly):
 
-1. YES only if the page topic directly relates to a disease or subject this article discusses IN DEPTH (not just a passing mention in a list of 3+ cancers).
-2. NO for a different cancer type unless the article explicitly discusses both (e.g., an alcohol article discusses both breast and esophageal cancer).
-3. NO for event announcements, organizational pages, volunteer pages, donation pages.
-4. NO for IJCCD journal papers UNLESS the study directly investigates a topic this article covers.
-5. NO for treatment/clinical-trial pages when the article discusses risk/epidemiology of that cancer (topic mismatch). YES for overview/awareness/101 pages from risk sentences.
-6. NO for pages the article already links to.
-7. NO for pages whose content type does not match the article's discussion of that topic.
+YES when:
+- The candidate covers the SAME disease this article discusses individually (not in a list of 3+ cancers)
+- The candidate is a 101/overview/awareness page for that disease
+- The candidate is a relevant IJCCD study about that specific disease AND the risk factor or treatment this article covers
+- The candidate is a contributor profile for a doctor quoted in this article
+
+NO when:
+- DIFFERENT DISEASE. "Breast cancer" is not "kidney cancer" even if both mention "immunotherapy"
+- TOPIC MISMATCH. Do not suggest a treatment/clinical-trial page when the article discusses risk or epidemiology of that cancer. Risk sentences should link to overview/awareness/101 pages only
+- ALREADY LINKED. The article already links to this page
+- EVENT ANNOUNCEMENT. Blog posts about conferences, fundraisers, or organizational events
+- ORGANIZATIONAL PAGE. Volunteer, donation, partnership, community health assessment pages
+- IJCCD MISMATCH. Journal paper about a different topic than this article covers
+- The candidate page has no topical connection to any paragraph in this article
 
 CANDIDATES:
 {chr(10).join(cand_lines)}
 
-RESPOND with ONLY numbered lines, one per candidate:
-1. YES - [one line reason] or 1. NO - [one line reason]
-Do not add any other text."""
+RESPOND exactly {len(candidates)} lines, one per candidate:
+1. YES - [reason] or 1. NO - [reason]
+Nothing else."""
 
 
 def _build_receive_prompt(article: dict, candidates: list[dict]) -> str:
-    """Build the Receive-side relevance judgment prompt."""
     h1 = article.get("h1") or article.get("title_clean") or ""
-    diseases = ", ".join(article.get("_diseases", [])) or "unknown"
+    diseases = ", ".join(article.get("_diseases", [])) or "not identified"
 
     cand_lines = []
     for i, c in enumerate(candidates, 1):
-        line = (f"{i}. {c['url']} | H1: {c.get('h1') or c.get('title_clean') or ''} "
-                f"| Section: {c.get('section', '')}")
-        cand_lines.append(line)
+        h = c.get("h1") or c.get("title_clean") or ""
+        s = c.get("section", "")
+        cand_lines.append(f"{i}. [{s}] {h}")
 
-    return f"""You are reviewing which pages should add an internal link TO the article below.
+    return f"""TASK: Decide which candidate pages should add an internal link pointing TO this article.
 
-ARTICLE TO LINK TO: {h1}
-URL: {article.get('url', '')}
-TOPIC: {diseases}
+CONTEXT:
+Article to link TO: "{h1}"
+Article topic: {diseases}
 
-Should each candidate page below add a link pointing to this article? Rules:
+The link on the candidate page should help THAT PAGE's readers discover this article. The anchor text will describe this article's topic, not just any keyword.
 
-1. YES only if the candidate page discusses a topic where this article adds value (e.g., a breast cancer page that mentions alcohol should link to an alcohol-cancer-risk article).
-2. NO for IJCCD journal papers (they cannot be edited to add links).
-3. NO for pages that already link to this article.
-4. NO if the connection is too thin (e.g., both mention 'cancer' but discuss unrelated topics).
+DECISION RULES:
+
+YES when:
+- The candidate page discusses a disease or risk factor that this article covers in depth
+- The candidate page mentions a substance (alcohol, smoking, etc.) that this article analyzes
+- Adding a link from that page to this article genuinely helps that page's readers understand the topic better
+
+NO when:
+- IJCCD journal paper (published research cannot be edited)
+- ALREADY LINKS to this article
+- CONNECTION TOO THIN. Sharing the word "cancer" alone is not enough. The candidate must discuss a topic this article covers specifically
+- CONTRIBUTOR PROFILE (unless the contributor is quoted in this article)
+- EVENT ANNOUNCEMENT or organizational page
 
 CANDIDATES:
 {chr(10).join(cand_lines)}
 
-RESPOND with ONLY numbered lines:
-1. YES - [reason] or 1. NO - [reason]"""
+RESPOND exactly {len(candidates)} lines:
+1. YES - [reason] or 1. NO - [reason]
+Nothing else."""
 
 
-def _call_gemini(prompt: str) -> str | None:
-    """Make one Gemini API call. Returns the text response or None on failure."""
+def _build_rewrite_prompt(sentence: str, anchor: str, target_title: str,
+                          target_url: str) -> str:
+    return f"""TASK: Rewrite one sentence to include a hyperlinked phrase.
+
+ORIGINAL: {sentence}
+
+INSERT THIS PHRASE: {anchor}
+LINK TO: {target_url} (page titled: {target_title})
+
+RULES:
+1. The phrase "{anchor}" must appear WORD FOR WORD in your output
+2. Wrap it as [{anchor}]({target_url})
+3. Keep the original meaning intact. Do not add facts, statistics, or medical claims
+4. Minimal changes. If you can add just 2 to 3 words to fit the phrase, do that. Do not restructure the whole sentence
+5. The result must read naturally as part of a cancer education article
+6. Return ONLY the rewritten sentence. No quotes, no explanation, no preamble
+
+REWRITE:"""
+
+
+def _call_gemini(prompt: str, max_tokens: int = 2048) -> str | None:
     key = _get_api_key()
     if not key:
         return None
@@ -121,7 +157,7 @@ def _call_gemini(prompt: str) -> str | None:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": max_tokens,
         }
     }
 
@@ -130,11 +166,10 @@ def _call_gemini(prompt: str) -> str | None:
             r = httpx.post(url, json=payload, timeout=settings.GEMINI_TIMEOUT)
             if r.status_code == 200:
                 data = r.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
+                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                return parts[0].get("text", "") if parts else None
             elif r.status_code == 429:
-                # Rate limited. Wait and retry.
-                wait = min(30, 5 * (attempt + 1))
-                time.sleep(wait)
+                time.sleep(min(30, 5 * (attempt + 1)))
                 continue
             else:
                 return None
@@ -146,64 +181,78 @@ def _call_gemini(prompt: str) -> str | None:
 
 
 def _parse_judgments(response: str, count: int) -> list[dict]:
-    """Parse 'N. YES - reason' or 'N. NO - reason' lines."""
     results = []
     if not response:
         return [{"approved": False, "reason": "Gemini unavailable"} for _ in range(count)]
 
-    lines = response.strip().split("\n")
-    for line in lines:
+    for line in response.strip().split("\n"):
         line = line.strip()
         if not line:
             continue
-        # Match patterns like "1. YES - reason" or "1. NO - reason"
-        m = re.match(r"^\d+\.\s*(YES|NO)\s*[-–—:]\s*(.*)", line, re.I)
+        m = re.match(r"^\d+\.\s*(YES|NO)\s*[-\u2013\u2014:]\s*(.*)", line, re.I)
         if m:
             results.append({
                 "approved": m.group(1).upper() == "YES",
                 "reason": m.group(2).strip(),
             })
 
-    # Pad if parsing missed some lines
     while len(results) < count:
-        results.append({"approved": False, "reason": "Could not parse Gemini response"})
-
+        results.append({"approved": False, "reason": "Parse error"})
     return results[:count]
 
 
 def judge_give_candidates(article: dict, candidates: list[dict]) -> list[dict]:
-    """Ask Gemini which candidate pages are relevant for outbound links.
-
-    Returns the candidates list with 'gemini_approved' and 'gemini_reason' added.
-    """
     if not candidates:
         return candidates
-
     prompt = _build_give_prompt(article, candidates)
     response = _call_gemini(prompt)
     judgments = _parse_judgments(response, len(candidates))
-
     for cand, j in zip(candidates, judgments):
         cand["gemini_approved"] = j["approved"]
         cand["gemini_reason"] = j["reason"]
-
     return candidates
 
 
 def judge_receive_candidates(article: dict, candidates: list[dict]) -> list[dict]:
-    """Ask Gemini which candidate pages should link TO this article.
-
-    Returns the candidates list with 'gemini_approved' and 'gemini_reason' added.
-    """
     if not candidates:
         return candidates
-
     prompt = _build_receive_prompt(article, candidates)
     response = _call_gemini(prompt)
     judgments = _parse_judgments(response, len(candidates))
-
     for cand, j in zip(candidates, judgments):
         cand["gemini_approved"] = j["approved"]
         cand["gemini_reason"] = j["reason"]
-
     return candidates
+
+
+def rewrite_sentence(sentence: str, anchor: str, target_title: str,
+                     target_url: str) -> str | None:
+    """Rewrite one sentence to include an anchor phrase naturally.
+
+    Called ONLY when the anchor does not appear in the sentence.
+    Code handles exact matches; Gemini handles creative rewriting.
+    """
+    key = _get_api_key()
+    if not key:
+        return None
+
+    prompt = _build_rewrite_prompt(sentence, anchor, target_title, target_url)
+    response = _call_gemini(prompt, max_tokens=512)
+    if not response:
+        return None
+
+    rewrite = response.strip().strip('"').strip("'")
+
+    # Strict validation
+    if not re.search(r"\b" + re.escape(anchor) + r"\b", rewrite, re.I):
+        return None
+    if f"]({target_url})" not in rewrite:
+        return None
+    orig_words = len(sentence.split())
+    new_words = len(rewrite.split())
+    if orig_words > 0 and (new_words < orig_words * 0.6 or new_words > orig_words * 1.8):
+        return None
+    for bad in ["here is", "note:", "rewritten:", "i've", "i have"]:
+        if bad in rewrite.lower():
+            return None
+    return rewrite

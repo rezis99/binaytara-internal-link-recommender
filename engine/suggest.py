@@ -151,13 +151,14 @@ def _pre_filter_receive(article: dict, store: retrieval.Store,
 
 def _select_anchor_and_sentence(article: dict, target: dict,
                                 guide: dict) -> dict | None:
-    """Select anchor from the DESTINATION page's H1/title (not from source text).
-    Then find whether that anchor appears in any eligible paragraph of the source.
+    """Select anchor from the DESTINATION page's H1/title.
+    Then find whether that anchor appears in any eligible paragraph.
+    If not, pick the BEST paragraph for a Gemini rewrite.
 
     Returns dict with anchor, sentence, block_index, match_type, span, or None.
     """
-    # Get anchor candidates from the target page's H1 and title
     best_result = None
+    best_insertion = None  # best candidate for Gemini rewrite
     placeable = [c for c in article.get("chunks", []) if c.get("placement_ok", True)]
 
     for chunk in placeable:
@@ -166,16 +167,42 @@ def _select_anchor_and_sentence(article: dict, target: dict,
             continue
         if not rules.anchor_word_count_ok(result["anchor"]):
             continue
-        # Prefer exact matches over needs-insertion
-        if result["match_type"] in ("Exact in text", "Synonym in text"):
-            if best_result is None or \
-                    result["match_type"] == "Exact in text" and \
-                    best_result.get("match_type") != "Exact in text":
-                best_result = {**result, "chunk": chunk}
-        elif best_result is None:
-            best_result = {**result, "chunk": chunk}
 
-    return best_result
+        if result["match_type"] in ("Exact in text", "Synonym in text"):
+            # Best case: anchor already in the text
+            if best_result is None or \
+                    (result["match_type"] == "Exact in text" and
+                     best_result.get("match_type") != "Exact in text"):
+                best_result = {**result, "chunk": chunk}
+        elif result["match_type"] == "Needs insertion":
+            # Track the best "Needs insertion" candidate for Gemini rewrite
+            if best_insertion is None:
+                best_insertion = {**result, "chunk": chunk}
+
+    # If we have an exact/synonym match, use it (code handles the link wrapping)
+    if best_result is not None:
+        return best_result
+
+    # If no exact match but we have a "Needs insertion" candidate,
+    # try Gemini rewrite
+    if best_insertion is not None:
+        anchor = best_insertion["anchor"]
+        sentence = best_insertion["chunk"]["text"]
+        target_title = target.get("h1") or target.get("title_clean") or ""
+        target_url = target["url"]
+
+        rewrite = gemini.rewrite_sentence(sentence, anchor, target_title, target_url)
+        if rewrite:
+            best_insertion["match_type"] = "Gemini rewrite"
+            best_insertion["modified_override"] = rewrite
+            return best_insertion
+        else:
+            # Gemini unavailable or rewrite failed validation.
+            # Still return as "Needs insertion" so it appears in the output
+            # with the manual instruction, rather than being silently dropped.
+            return best_insertion
+
+    return None
 
 
 def _receive_anchor_for_article(article: dict, source_body: str) -> dict | None:
@@ -275,9 +302,13 @@ def links_to_give(article: dict, store: retrieval.Store,
             continue
 
         # Build the modified sentence
-        modified = rules.modified_sentence(
-            chunk["text"], result.get("span"), anchor,
-            target["url"], result["match_type"])
+        if result.get("modified_override"):
+            # Gemini already rewrote the sentence with [anchor](url) in place
+            modified = result["modified_override"]
+        else:
+            modified = rules.modified_sentence(
+                chunk["text"], result.get("span"), anchor,
+                target["url"], result["match_type"])
 
         # Scoring (simplified for v6: Gemini already judged relevance)
         score = 0.70 if result["match_type"] in ("Exact in text", "Synonym in text") else 0.50
@@ -370,20 +401,53 @@ def links_to_receive(article: dict, store: retrieval.Store,
 
         result = _receive_anchor_for_article(article, source_body)
         if result is None:
-            continue
+            # No natural anchor found. Try Gemini rewrite on the first
+            # sentence that mentions alcohol or the article's disease terms.
+            diseases = keyword_scan.article_diseases(article)
+            h1 = article.get("h1") or article.get("title_clean") or ""
+            # Find a sentence that at least mentions one disease term
+            best_sent = None
+            for sent in re.split(r'(?<=[.!?])\s+', source_body):
+                sent_lower = sent.lower()
+                if any(d in sent_lower for d in diseases) or "alcohol" in sent_lower:
+                    best_sent = sent.strip()
+                    break
+            if best_sent is None:
+                continue
+            # Try a Gemini rewrite
+            # Use a short anchor derived from the article's H1
+            short_anchors = anchor_mod.ngrams(h1, 2, 4)
+            anchor_to_try = short_anchors[0] if short_anchors else h1[:30]
+            rewrite = gemini.rewrite_sentence(
+                best_sent, anchor_to_try, h1, article["url"])
+            if rewrite:
+                result = {
+                    "anchor": anchor_to_try,
+                    "sentence": best_sent,
+                    "match_type": "Gemini rewrite",
+                    "modified_override": rewrite,
+                }
+            else:
+                continue
 
         level, why, basis = rules.overlap(source, article, result["anchor"], cmap)
 
         gemini_reason = source.get("gemini_reason", "")
+
+        # Build modified sentence
+        if result.get("modified_override"):
+            recv_modified = result["modified_override"]
+        else:
+            recv_modified = rules.modified_sentence(
+                result["sentence"], None, result["anchor"],
+                article["url"], result["match_type"])
 
         rows.append({
             "source_url": source["url"],
             "source_title": source.get("h1") or source.get("title_clean") or "",
             "section": source.get("section", ""),
             "existing_sentence": result["sentence"],
-            "modified_sentence": rules.modified_sentence(
-                result["sentence"], None, result["anchor"],
-                article["url"], result["match_type"]),
+            "modified_sentence": recv_modified,
             "anchor": result["anchor"],
             "relevance": "High" if result["match_type"] == "Exact in text" else "Medium",
             "match_type": result["match_type"],
