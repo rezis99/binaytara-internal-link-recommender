@@ -181,24 +181,51 @@ def _call_gemini(prompt: str, max_tokens: int = 2048) -> str | None:
 
 
 def _parse_judgments(response: str, count: int) -> list[dict]:
-    results = []
-    if not response:
-        return [{"approved": False, "reason": "Gemini unavailable"} for _ in range(count)]
+    """Parse Gemini's YES/NO verdicts.
 
-    for line in response.strip().split("\n"):
-        line = line.strip()
+    FAIL-OPEN by design. Gemini 1.5 Flash varies its formatting run to run
+    (markdown bold, different numbering, occasional preamble). A parse failure
+    means we could not read the verdicts, NOT that every candidate is bad.
+    Rejecting everything on a formatting quirk silently produced zero
+    suggestions, which is worse than showing unfiltered candidates.
+    """
+    if not response or not response.strip():
+        return [{"approved": True, "reason": "Gemini unavailable; unfiltered"}
+                for _ in range(count)]
+
+    # Strip markdown emphasis and list bullets before matching.
+    cleaned = response.replace("**", "").replace("__", "").replace("`", "")
+
+    # Index verdicts by their stated number so out-of-order or partial
+    # responses still land on the right candidate.
+    by_index: dict[int, dict] = {}
+    # Accepts: "1. YES - x" / "1) YES: x" / "1 - YES x" / "1. YES x"
+    pattern = re.compile(
+        r"^\s*(\d+)\s*[\.\)\-:]?\s*(YES|NO)\b\s*[-\u2013\u2014:,]?\s*(.*)$", re.I)
+
+    for line in cleaned.split("\n"):
+        line = line.strip().lstrip("-*\u2022 ").strip()
         if not line:
             continue
-        m = re.match(r"^\d+\.\s*(YES|NO)\s*[-\u2013\u2014:]\s*(.*)", line, re.I)
+        m = pattern.match(line)
         if m:
-            results.append({
-                "approved": m.group(1).upper() == "YES",
-                "reason": m.group(2).strip(),
-            })
+            idx = int(m.group(1))
+            if 1 <= idx <= count and idx not in by_index:
+                by_index[idx] = {
+                    "approved": m.group(2).upper() == "YES",
+                    "reason": (m.group(3) or "").strip() or "no reason given",
+                }
 
-    while len(results) < count:
-        results.append({"approved": False, "reason": "Parse error"})
-    return results[:count]
+    # Nothing parsed at all: the format was unreadable. Fail open.
+    if not by_index:
+        return [{"approved": True, "reason": "Verdicts unreadable; unfiltered"}
+                for _ in range(count)]
+
+    # Partial parse: candidates Gemini did not rule on are kept, not dropped.
+    return [
+        by_index.get(i, {"approved": True, "reason": "No verdict returned; kept"})
+        for i in range(1, count + 1)
+    ]
 
 
 def judge_give_candidates(article: dict, candidates: list[dict]) -> list[dict]:

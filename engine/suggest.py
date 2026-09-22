@@ -263,9 +263,11 @@ def links_to_give(article: dict, store: retrieval.Store,
     v6 pipeline: pre-filter → Gemini judges → code selects anchors → format.
     """
     cmap = getattr(store, "cannibalization", {}) or {}
+    funnel = article.setdefault("_funnel", {})
 
     # Step 1: Pre-filter candidates
     candidates = _pre_filter_give(article, store, allowed_sections)
+    funnel["give_prefiltered"] = len(candidates)
 
     # Step 2: Gemini judges relevance
     gemini_ok, _ = gemini.is_available()
@@ -275,6 +277,10 @@ def links_to_give(article: dict, store: retrieval.Store,
     else:
         # Fallback: use all pre-filtered candidates (less precise)
         approved = candidates
+    funnel["give_gemini_approved"] = len(approved)
+    dropped_no_anchor = 0
+    dropped_dup_anchor = 0
+    dropped_rules = 0
 
     # Step 3: For each approved page, select anchor and find sentence
     used_anchors: dict[str, str] = {}  # anchor_lower → target_url (one-anchor-one-target)
@@ -283,6 +289,7 @@ def links_to_give(article: dict, store: retrieval.Store,
     for target in approved:
         result = _select_anchor_and_sentence(article, target, store.guide)
         if result is None:
+            dropped_no_anchor += 1
             continue
 
         anchor = result["anchor"]
@@ -291,14 +298,17 @@ def links_to_give(article: dict, store: retrieval.Store,
 
         # One anchor one target: if this anchor already points to another URL, skip
         if anchor_lower in used_anchors and used_anchors[anchor_lower] != target["url"]:
+            dropped_dup_anchor += 1
             continue
         used_anchors[anchor_lower] = target["url"]
 
         # SOP rules
         named_ok, name_note = rules.contributor_named(target, chunk["text"])
         if not named_ok:
+            dropped_rules += 1
             continue
         if rules.already_linked_in_body(article, target["url"]):
+            dropped_rules += 1
             continue
 
         # Build the modified sentence
@@ -368,7 +378,12 @@ def links_to_give(article: dict, store: retrieval.Store,
             "is_journal_target": is_journal,
         })
 
+    funnel["give_no_anchor"] = dropped_no_anchor
+    funnel["give_dup_anchor"] = dropped_dup_anchor
+    funnel["give_rule_drops"] = dropped_rules
+    funnel["give_before_caps"] = len(rows)
     rows = rules.enforce_caps(rows)
+    funnel["give_final"] = len(rows)
     return rows
 
 
@@ -381,8 +396,11 @@ def links_to_receive(article: dict, store: retrieval.Store,
     body_texts = getattr(store, "body_texts", {}) or {}
     cmap = getattr(store, "cannibalization", {}) or {}
 
+    funnel = article.setdefault("_funnel", {})
+
     # Step 1: Pre-filter
     candidates = _pre_filter_receive(article, store, allowed_sections)
+    funnel["recv_prefiltered"] = len(candidates)
 
     # Step 2: Gemini judges
     gemini_ok, _ = gemini.is_available()
@@ -391,6 +409,7 @@ def links_to_receive(article: dict, store: retrieval.Store,
         approved = [c for c in candidates if c.get("gemini_approved", True)]
     else:
         approved = candidates
+    funnel["recv_gemini_approved"] = len(approved)
 
     # Step 3: For each approved page, find an anchor in its body text
     rows: list[dict] = []
@@ -461,6 +480,7 @@ def links_to_receive(article: dict, store: retrieval.Store,
         })
 
     rows.sort(key=lambda r: -r["score"])
+    funnel["recv_final"] = len(rows)
     return rows
 
 
@@ -495,5 +515,6 @@ def analyse(article: dict, store: retrieval.Store,
             "age_days": round(retrieval.index_age_days(store), 1),
         },
         "gemini": {"available": gemini_ok, "provider": gemini_provider},
+        "funnel": article.get("_funnel", {}),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
