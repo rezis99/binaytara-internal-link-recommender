@@ -160,5 +160,5 @@ GEMINI_RECEIVE_CANDIDATES = 30  # max candidates to send for receive-side judgme
 # ---------- Hub page skip (v6) ----------
 # When a cancer type has a planned hub page that is NOT yet live,
 # skip the existing 101/overview page for that cancer type.
-# The writer should not build links to a page that will be replaced.
-HUB_SKIP_101_WHEN_PLANNED = True
+# Set to True ONLY after the first hub pages go live.
+HUB_SKIP_101_WHEN_PLANNED = False
