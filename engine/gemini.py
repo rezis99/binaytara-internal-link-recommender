@@ -346,6 +346,7 @@ def _build_link_prompt(paragraphs, target, feedback=""):
     target_title = target.get("h1") or target.get("title_clean") or ""
     target_url = target["url"]
     target_section = target.get("section", "")
+    slug = target_url.rstrip("/").split("/")[-1].replace("-", " ")
     para_lines = [f'[{p["index"]}] {p["text"]}' for p in paragraphs]
     feedback_block = ""
     if feedback:
@@ -358,16 +359,17 @@ def _build_link_prompt(paragraphs, target, feedback=""):
 
 LINK TARGET (the page the link points to):
   Title: {target_title}
-  URL: {target_url}
+  URL topic (from the address): {slug}
   Section: {target_section}
 {feedback_block}
 SOURCE PARAGRAPHS (from the article being edited; pick exactly ONE):
 {chr(10).join(para_lines)}
 
 HOW TO CHOOSE THE ANCHOR (the clickable words):
-- It must be a 2-to-5-word TOPIC phrase: a disease, drug, treatment, or concept that describes what the reader will find on the target page.
+- It must be a 2-to-5-word TOPIC phrase that describes WHAT THE TARGET PAGE IS ABOUT, so a reader knows where the link goes before clicking. Check the target Title and URL topic above: the anchor should share a real subject word with them. Example: for a page titled "Mammogram Screening Myths", a good anchor is "mammogram screening", NOT "breast cancer" (that describes a different page). For a page titled "Colorectal Cancer at ASCO 2026", "colorectal cancer" is correct.
 - It must read naturally as link text on its own. "breast cancer", "KRAS inhibitors", "checkpoint inhibitor toxicity" are good. A person's name with credentials ("Rosa Nadal Rios MD PhD"), an institution or event name ("MD Anderson", "GU Cancers Summit"), or a mid-sentence fragment ("on Advances", "First Positive", "Treatment Diversifies") are NOT acceptable anchors.
-- Strongly prefer a phrase that already appears word-for-word in the paragraph. If a perfect phrase is not present, you MAY make a small, natural edit to the sentence to introduce one (add a few words), as long as you add NO new medical facts, numbers, or claims.
+- Strongly prefer a phrase that already appears word-for-word in the paragraph AND matches the target page's topic. If the paragraph does not contain a phrase matching the target's topic, this is probably the wrong target: return found=false rather than forcing a mismatched anchor.
+- You MAY make a small, natural edit to the sentence to introduce the phrase, as long as you add NO new medical facts, numbers, or claims.
 
 WHERE NOT TO PLACE IT:
 - Not in a sentence that lists 3 or more different cancer types (a statistics list).
@@ -423,7 +425,9 @@ def generate_link(paragraphs, target, max_attempts=3):
         existing = parsed.get("existing_sentence", "")
         modified = parsed.get("modified_sentence", "")
 
-        ok, reason = lv.validate_generated_link(anchor, target["url"], existing, modified)
+        ok, reason = lv.validate_generated_link(
+            anchor, target["url"], existing, modified,
+            target_title=target.get("h1") or target.get("title_clean") or "")
         if ok:
             return {
                 "anchor": anchor,

@@ -72,6 +72,45 @@ def is_generic_anchor(anchor: str) -> bool:
     return (anchor or "").strip().lower() in GENERIC_ANCHORS
 
 
+# Words that are too generic to prove an anchor matches a destination's topic.
+_TOPIC_STOPWORDS = {
+    "and", "or", "the", "a", "an", "of", "in", "for", "with", "to", "on",
+    "at", "is", "are", "cancer", "cancers", "disease", "care", "treatment",
+    "new", "health", "patient", "patients", "risk", "study", "research",
+    "awareness", "month", "day", "guide", "overview", "understanding",
+}
+
+
+def anchor_matches_destination(anchor: str, target_url: str,
+                               target_title: str) -> tuple[bool, str]:
+    """QA (mammogram bug): the anchor must describe the DESTINATION page's
+    topic. "breast cancer" pointing at a mammogram-screening-myths page is
+    wrong even though both are women's-health topics.
+
+    Proof of a match = at least one meaningful (non-stopword, non-generic)
+    word shared between the anchor and EITHER the destination's URL slug OR
+    its title. The slug is checked because it is the most honest one-line
+    summary of what a page is about, exactly as the reviewer suggested.
+    """
+    anchor_words = {w for w in re.findall(r"[a-z]+", (anchor or "").lower())
+                    if w not in _TOPIC_STOPWORDS and len(w) > 2}
+    if not anchor_words:
+        return False, f"anchor '{anchor}' has no topical word to match the destination"
+
+    slug = (target_url or "").rstrip("/").split("/")[-1]
+    slug_words = {w for w in re.findall(r"[a-z]+", slug.lower())
+                  if w not in _TOPIC_STOPWORDS and len(w) > 2}
+    title_words = {w for w in re.findall(r"[a-z]+", (target_title or "").lower())
+                   if w not in _TOPIC_STOPWORDS and len(w) > 2}
+
+    dest_words = slug_words | title_words
+    if anchor_words & dest_words:
+        return True, ""
+    return False, (f"anchor '{anchor}' does not match the destination page's "
+                   f"topic (slug: {slug[:40]}); pick a phrase that reflects what "
+                   "that page is actually about")
+
+
 # ---------------------------------------------------------------- paragraphs
 
 # QA #9: bio paragraphs used as link-insertion targets. A contributor bio
@@ -181,7 +220,7 @@ def find_eligible_sentence(paragraph_text: str) -> list[str]:
 # ---------------------------------------------------------------- full check
 
 def validate_generated_link(anchor: str, target_url: str, existing_sentence: str,
-                            modified_sentence: str) -> tuple[bool, str]:
+                            modified_sentence: str, target_title: str = "") -> tuple[bool, str]:
     """The single gate every LLM-generated (anchor, sentence) pair must
     clear before it can reach a writer. Combines every rule above plus a
     minimal-change check so the model cannot rewrite past the anchor
@@ -197,6 +236,11 @@ def validate_generated_link(anchor: str, target_url: str, existing_sentence: str
         return False, why
     if is_generic_anchor(anchor):
         return False, f"'{anchor}' is a generic anchor, not a topic"
+
+    # The anchor must describe the destination page (mammogram bug fix).
+    matches, mreason = anchor_matches_destination(anchor, target_url, target_title)
+    if not matches:
+        return False, mreason
 
     if not modified_sentence or not existing_sentence:
         return False, "missing sentence"
