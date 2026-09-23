@@ -179,9 +179,10 @@ def scan_pages(terms: list[str], body_texts: dict[str, str],
     for url, text in body_texts.items():
         if url in exclude_urls:
             continue
+        text_lower = text.lower()  # body_texts keeps original case now (v7); lowercase here for matching only
         count = 0
         for term in terms:
-            if term in text:
+            if term in text_lower:
                 count += 1
         if count > 0:
             hits[url] = count
@@ -222,7 +223,7 @@ def reverse_scan(source_body: str, pages: dict, body_texts: dict[str, str],
         if not page_diseases:
             continue
         # Also extract key terms from the page's body (top disease bigrams).
-        page_body = body_texts.get(url, "")
+        page_body = body_texts.get(url, "").lower()  # original case kept in storage (v7); lowercase here only
         page_terms: set[str] = set(page_diseases)
         # Add frequent disease bigrams from the page's body.
         for term in DISEASE_TERMS:

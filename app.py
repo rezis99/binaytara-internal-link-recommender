@@ -1,4 +1,4 @@
-"""Binaytara Internal Link Recommender v6: Streamlit front end.
+"""Binaytara Internal Link Recommender v7: Streamlit front end.
 
 Gemini judges relevance. Code handles anchors and formatting.
 """
@@ -10,7 +10,7 @@ from config import settings
 from engine import gemini, input_parser, retrieval, suggest
 from output import excel_writer
 
-st.set_page_config(page_title="Binaytara Internal Linker v6",
+st.set_page_config(page_title="Binaytara Internal Linker v7",
                    page_icon="🔗", layout="wide")
 
 
@@ -51,6 +51,28 @@ def receive_table(rows):
     } for r in rows]
 
 
+def merged_table(rows):
+    out = []
+    for r in rows:
+        if r["direction"] == "GIVE":
+            other_title, other_url = r["target_title"], r["target_url"]
+        else:
+            other_title, other_url = r["source_title"], r["source_url"]
+        out.append({
+            "Direction": r["direction"],
+            "Relevance": f"{relevance_emoji(r['relevance'])} {r['relevance']}",
+            "Match Type": r["match_type"],
+            "Anchor Text": r["anchor"],
+            "Other Page Title": other_title,
+            "Other Page Link": other_url,
+            "Section": r["section"],
+            "Existing Sentence": r["existing_sentence"],
+            "Modified Sentence": r["modified_sentence"],
+            "Notes": r["notes"],
+        })
+    return out
+
+
 def render(res, key_prefix: str = ""):
     a = res["article"]
     c = st.columns(5)
@@ -70,20 +92,22 @@ def render(res, key_prefix: str = ""):
             with d1:
                 st.markdown("**Links to Give**")
                 st.text(
-                    f"Candidates pre-filtered : {f.get('give_prefiltered', 0)}\n"
-                    f"Passed Gemini relevance : {f.get('give_gemini_approved', 0)}\n"
-                    f"Dropped, no usable anchor: {f.get('give_no_anchor', 0)}\n"
-                    f"Dropped, duplicate anchor: {f.get('give_dup_anchor', 0)}\n"
-                    f"Dropped, SOP rules       : {f.get('give_rule_drops', 0)}\n"
-                    f"Before per-paragraph caps: {f.get('give_before_caps', 0)}\n"
-                    f"FINAL                    : {f.get('give_final', 0)}"
+                    f"Candidates pre-filtered   : {f.get('give_prefiltered', 0)}\n"
+                    f"Passed Gemini relevance   : {f.get('give_gemini_approved', 0)}\n"
+                    f"Dropped, no valid link    : {f.get('give_dropped_no_link', 0)}\n"
+                    f"Dropped, duplicate anchor : {f.get('give_dropped_dup_anchor', 0)}\n"
+                    f"Dropped, SOP rules        : {f.get('give_dropped_rules', 0)}\n"
+                    f"Before per-paragraph caps : {f.get('give_before_caps', 0)}\n"
+                    f"FINAL                     : {f.get('give_final', 0)}"
                 )
             with d2:
                 st.markdown("**Links to Receive**")
                 st.text(
-                    f"Candidates pre-filtered : {f.get('recv_prefiltered', 0)}\n"
-                    f"Passed Gemini relevance : {f.get('recv_gemini_approved', 0)}\n"
-                    f"FINAL                    : {f.get('recv_final', 0)}"
+                    f"Candidates pre-filtered   : {f.get('recv_prefiltered', 0)}\n"
+                    f"Passed Gemini relevance   : {f.get('recv_gemini_approved', 0)}\n"
+                    f"Dropped, live fetch failed: {f.get('recv_dropped_fetch_fail', 0)}\n"
+                    f"Dropped, no valid link    : {f.get('recv_dropped_no_link', 0)}\n"
+                    f"FINAL                     : {f.get('recv_final', 0)}"
                 )
             if f.get("give_prefiltered", 0) == 0:
                 st.warning(
@@ -93,21 +117,31 @@ def render(res, key_prefix: str = ""):
                 st.warning(
                     "Gemini rejected every candidate. Check the API key and quota at "
                     "https://aistudio.google.com")
-            elif f.get("give_final", 0) == 0 and f.get("give_no_anchor", 0) > 0:
-                st.warning(
-                    "Candidates passed relevance but no usable anchor was found in the "
-                    "article text. Gemini sentence rewriting may be failing validation.")
+            elif f.get("give_final", 0) == 0 and f.get("give_dropped_no_link", 0) > 0:
+                st.info(
+                    "Every approved candidate was dropped because Gemini could not "
+                    "produce a natural, valid placement after 3 attempts. This is by "
+                    "design: an unimplementable suggestion is worse than none.")
 
-    t1, t2, t3 = st.tabs([
+    t0, t1, t2, t3 = st.tabs([
+        f"All ({len(res['give']) + len(res['receive'])})",
         f"Links to Give ({len(res['give'])})",
         f"Links to Receive ({len(res['receive'])})",
         f"Existing links ({len(a['existing_links'])})",
     ])
 
+    with t0:
+        st.caption("Give and Receive together, sorted by score. The Direction column "
+                   "shows GIVE (a link this article should add) or RECEIVE (a link "
+                   "another page should add pointing here).")
+        merged = res.get("merged") or (res["give"] + res["receive"])
+        if merged:
+            st.dataframe(merged_table(merged), use_container_width=True, hide_index=True)
+        else:
+            st.info("No suggestions passed the Gemini relevance check.")
     with t1:
-        st.caption("Where in this article to place links out. Anchors are selected "
-                   "from destination page H1/title. First paragraph, Key Takeaways, "
-                   "references, and direct quotes are excluded per SOP.")
+        st.caption("Where in this article to place links out. First paragraph, Key "
+                   "Takeaways, references, and direct quotes are excluded per SOP.")
         if res["give"]:
             st.dataframe(give_table(res["give"]), use_container_width=True,
                          hide_index=True)
@@ -131,7 +165,7 @@ def render(res, key_prefix: str = ""):
 
 
 def main():
-    st.title("🔗 Binaytara Internal Linker v6")
+    st.title("🔗 Binaytara Internal Linker v7")
     st.caption("Gemini judges relevance. Code handles anchors and formatting.")
 
     try:
@@ -244,7 +278,7 @@ def main():
         st.download_button(
             "⬇ Download Excel",
             data=excel_writer.build_workbook(results),
-            file_name="binaytara-internal-links-v6.xlsx",
+            file_name="binaytara-internal-links-v7.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
         )

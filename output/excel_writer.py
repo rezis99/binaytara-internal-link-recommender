@@ -50,6 +50,23 @@ RECEIVE_COLS = [
     ("Existing Sentence", 58), ("Modified Sentence", 58),
     ("Notes", 42),
 ]
+# v7: user request #1. In batch mode, Give and Receive were on separate
+# tabs, which made it hard to see everything for one article at a glance.
+# Direction is the first column so it is never confused with the other
+# page-title/link columns that follow. Page Title/Link/Section describe the
+# OTHER page in the pair -- the target when Direction=GIVE, the source when
+# Direction=RECEIVE -- since only one of those roles applies per row.
+MERGED_COLS = [
+    ("Use?", 8), ("Direction", 11), ("Relevance", 11), ("Match Type", 15),
+    ("Keyword Competition", 28), ("Anchor Text", 22),
+    ("Other Page Title", 34), ("Other Page Link", 46), ("Section", 12),
+    ("Existing Sentence", 56), ("Modified Sentence", 56),
+    ("Review Context", 40), ("Notes", 36),
+]
+DIRECTION_FILL = {
+    "GIVE": PatternFill("solid", fgColor="DDEBF7"),
+    "RECEIVE": PatternFill("solid", fgColor="FCE4D6"),
+}
 
 _DANGEROUS = ("=", "+", "-", "@", "\t", "\r")
 
@@ -166,7 +183,44 @@ def write_receive(ws, rows: list[dict], target_url: str) -> None:
                    False, 11)
 
 
+def write_merged(ws, rows: list[dict]) -> None:
+    """v7: one sheet per article with Give and Receive interleaved, sorted
+    by score. Direction (GIVE/RECEIVE) is column B so the reader always
+    knows which role the 'Other Page' column is playing without opening a
+    second tab to check."""
+    _header(ws, MERGED_COLS)
+    for i, r in enumerate(rows, start=2):
+        direction = r["direction"]
+        if direction == "GIVE":
+            other_title, other_url = r["target_title"], r["target_url"]
+        else:
+            other_title, other_url = r["source_title"], r["source_url"]
+
+        values = [
+            None, direction, r["relevance"], r["match_type"],
+            _competition_text(r), r["anchor"],
+            other_title, None, r["section"],
+            r["existing_sentence"], r["modified_sentence"],
+            r.get("review_context", ""), r["notes"],
+        ]
+        for c, v in enumerate(values, 1):
+            if c == 8:
+                _link(ws, i, 8, other_url)
+            else:
+                ws.cell(row=i, column=c, value=esc(v))
+        ws.cell(row=i, column=6).font = Font(bold=True)  # anchor
+        dc = ws.cell(row=i, column=2)
+        if direction in DIRECTION_FILL:
+            dc.fill = DIRECTION_FILL[direction]
+        dc.font = Font(bold=True)
+        _style_row(ws, i, len(MERGED_COLS), r["relevance"], 5,
+                  r["overlap_level"], False, 13)
+
+
 def write_summary(ws, results: list[dict]) -> None:
+
+
+
     ws.column_dimensions["A"].width = 34
     ws.column_dimensions["B"].width = 96
     row = 1
@@ -207,13 +261,10 @@ def build_workbook(results: list[dict]) -> bytes:
     write_summary(ws, results)
     for res in results:
         url = res["article"]["url"]
-        give = res["give"]
-        topical = [r for r in give if r.get("is_topical", True)]
-        other = [r for r in give if not r.get("is_topical", True)]
-        write_give(wb.create_sheet(sheet_name("Give", url)), topical)
-        if other:
-            write_give(wb.create_sheet(sheet_name("Other", url)), other)
-        write_receive(wb.create_sheet(sheet_name("Recv", url)), res["receive"], url)
+        merged = res.get("merged")
+        if merged is None:  # backward compatibility with older result shapes
+            merged = res["give"] + res["receive"]
+        write_merged(wb.create_sheet(sheet_name("Article", url)), merged)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
