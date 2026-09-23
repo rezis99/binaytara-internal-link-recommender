@@ -166,7 +166,7 @@ def build(limit: int | None = None, out_dir: Path | None = None,
         # Store body text for the keyword scanner (v3).
         raw_body = rec.pop("_body_text", "")
         if raw_body:
-            body_texts[target] = raw_body.lower()
+            body_texts[target] = raw_body
 
         blocks = rec.pop("_blocks")
         page_chunks = chunker.chunk_page(target, blocks)

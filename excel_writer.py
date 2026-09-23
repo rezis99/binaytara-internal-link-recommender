@@ -50,6 +50,23 @@ RECEIVE_COLS = [
     ("Existing Sentence", 58), ("Modified Sentence", 58),
     ("Notes", 42),
 ]
+# v7: user request #1. In batch mode, Give and Receive were on separate
+# tabs, which made it hard to see everything for one article at a glance.
+# Direction is the first column so it is never confused with the other
+# page-title/link columns that follow. Page Title/Link/Section describe the
+# OTHER page in the pair -- the target when Direction=GIVE, the source when
+# Direction=RECEIVE -- since only one of those roles applies per row.
+MERGED_COLS = [
+    ("Use?", 8), ("Direction", 11), ("Relevance", 10),
+    ("Anchor Text", 24),
+    ("Other Page Title", 36), ("Other Page Link", 48), ("Section", 11),
+    ("Existing Sentence", 62), ("Modified Sentence (ready to paste)", 62),
+    ("Why this link / notes", 46),
+]
+DIRECTION_FILL = {
+    "GIVE": PatternFill("solid", fgColor="DDEBF7"),
+    "RECEIVE": PatternFill("solid", fgColor="FCE4D6"),
+}
 
 _DANGEROUS = ("=", "+", "-", "@", "\t", "\r")
 
@@ -166,7 +183,84 @@ def write_receive(ws, rows: list[dict], target_url: str) -> None:
                    False, 11)
 
 
+def write_merged(ws, rows: list[dict], article_title: str, article_url: str) -> None:
+    """One sheet per article. Row 1 names the article being analysed (issue #6).
+    Row 2 is the header. Data from row 3. No band fills (issue #7): the plain
+    white background keeps the sentence text readable. Direction is colour-cued
+    only, lightly. Review Context and Notes are merged into one 'Why' column
+    (issue #7). Row heights and wrapping are set explicitly (issue #1)."""
+    thin = Side(style="thin", color="D9D9D9")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Row 1: which article this sheet is about.
+    ws.cell(row=1, column=1, value=esc(f"Internal links for:  {article_title}"))
+    ws.cell(row=1, column=1).font = Font(bold=True, size=12, color="1F4E79")
+    ws.cell(row=2, column=1, value=esc(article_url))
+    ws.cell(row=2, column=1).font = Font(italic=True, color="0563C1")
+
+    header_row = 3
+    for i, (title, width) in enumerate(MERGED_COLS, 1):
+        c = ws.cell(row=header_row, column=i, value=title)
+        c.fill, c.font, c.alignment = HEADER_FILL, HEADER_FONT, WRAP
+        c.border = border
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(MERGED_COLS))}{header_row}"
+
+    def _why(r):
+        # One column, no duplication (issue #7). Gemini's reason first, then
+        # any structural note (hub page, IJCCD placement) appended once.
+        ctx = (r.get("review_context") or "").strip()
+        notes = (r.get("notes") or "").strip()
+        if notes.startswith(ctx) and ctx:
+            extra = notes[len(ctx):].lstrip(". ").strip()
+            return ctx + (f". {extra}" if extra else "")
+        parts = [p for p in (ctx, notes) if p]
+        # de-dup if identical
+        if len(parts) == 2 and parts[0] == parts[1]:
+            parts = parts[:1]
+        return ". ".join(parts)
+
+    for offset, r in enumerate(rows):
+        i = header_row + 1 + offset
+        direction = r["direction"]
+        if direction == "GIVE":
+            other_title, other_url = r["target_title"], r["target_url"]
+        else:
+            other_title, other_url = r["source_title"], r["source_url"]
+
+        values = [
+            None, direction, r["relevance"], r["anchor"],
+            other_title, None, r["section"],
+            r["existing_sentence"], r["modified_sentence"], _why(r),
+        ]
+        for c, v in enumerate(values, 1):
+            if c == 6:
+                _link(ws, i, 6, other_url)
+            else:
+                cell = ws.cell(row=i, column=c, value=esc(v))
+            ws.cell(row=i, column=c).alignment = WRAP
+            ws.cell(row=i, column=c).border = border
+
+        ws.cell(row=i, column=4).font = Font(bold=True)  # anchor
+        dc = ws.cell(row=i, column=2)
+        if direction in DIRECTION_FILL:
+            dc.fill = DIRECTION_FILL[direction]
+        dc.font = Font(bold=True)
+
+        # Explicit row height so long sentences are visible without manual
+        # resizing (issue #1). Estimate from the longest wrapped cell.
+        longest = max(len(str(r.get("existing_sentence") or "")),
+                      len(str(r.get("modified_sentence") or "")))
+        # ~62 chars per line at the set column width; 15 points per line.
+        lines = max(2, (longest // 60) + 1)
+        ws.row_dimensions[i].height = min(15 * lines, 150)
+
+
 def write_summary(ws, results: list[dict]) -> None:
+
+
+
     ws.column_dimensions["A"].width = 34
     ws.column_dimensions["B"].width = 96
     row = 1
@@ -206,14 +300,13 @@ def build_workbook(results: list[dict]) -> bytes:
     ws.title = "Summary"
     write_summary(ws, results)
     for res in results:
-        url = res["article"]["url"]
-        give = res["give"]
-        topical = [r for r in give if r.get("is_topical", True)]
-        other = [r for r in give if not r.get("is_topical", True)]
-        write_give(wb.create_sheet(sheet_name("Give", url)), topical)
-        if other:
-            write_give(wb.create_sheet(sheet_name("Other", url)), other)
-        write_receive(wb.create_sheet(sheet_name("Recv", url)), res["receive"], url)
+        a = res["article"]
+        url = a["url"]
+        merged = res.get("merged")
+        if merged is None:
+            merged = res["give"] + res["receive"]
+        write_merged(wb.create_sheet(sheet_name("Article", url)), merged,
+                     a.get("title") or url, url)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

@@ -51,6 +51,15 @@ def receive_table(rows):
     } for r in rows]
 
 
+def _merge_why(r):
+    ctx = (r.get("review_context") or "").strip()
+    notes = (r.get("notes") or "").strip()
+    if ctx and notes.startswith(ctx):
+        return notes
+    parts = list(dict.fromkeys(p for p in (ctx, notes) if p))
+    return ". ".join(parts)
+
+
 def merged_table(rows):
     out = []
     for r in rows:
@@ -61,14 +70,13 @@ def merged_table(rows):
         out.append({
             "Direction": r["direction"],
             "Relevance": f"{relevance_emoji(r['relevance'])} {r['relevance']}",
-            "Match Type": r["match_type"],
             "Anchor Text": r["anchor"],
             "Other Page Title": other_title,
             "Other Page Link": other_url,
             "Section": r["section"],
             "Existing Sentence": r["existing_sentence"],
-            "Modified Sentence": r["modified_sentence"],
-            "Notes": r["notes"],
+            "Modified Sentence (ready to paste)": r["modified_sentence"],
+            "Why this link / notes": _merge_why(r),
         })
     return out
 
